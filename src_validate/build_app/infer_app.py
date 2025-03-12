@@ -6,7 +6,7 @@ import torch
 from monai.data import MetaTensor 
 import os
 import sys 
-basedir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+basedir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.append(basedir)
 import copy 
 
