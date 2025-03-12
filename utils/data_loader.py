@@ -243,6 +243,7 @@ class Dataset_Union_ALL_Infer(Dataset):
         self.image_paths = self.image_paths[self.split_idx :: self.split_num]
 
 
+
 class Union_Dataloader(tio.SubjectsLoader):
     def __iter__(self):
         return BackgroundGenerator(super().__iter__())
@@ -299,6 +300,35 @@ class Test_Single(Dataset):
 
         self.image_paths.append(paths)
         self.label_paths.append(paths.replace("images", "labels"))
+
+
+class Infer_Single(Dataset_Union_ALL_Infer):
+    def __init__(
+        self,
+        path,
+        image_size=128,
+        transform=None,
+        split_num=1,
+        split_idx=0,
+        pcc=False,
+        get_all_meta_info=False,
+    ):
+        self.path = path
+        self.split_num = split_num
+        self.split_idx = split_idx
+
+        self._set_file_paths(self.path)
+        self.image_size = image_size
+        self.transform = transform
+        self.pcc = pcc
+        self.get_all_meta_info = get_all_meta_info
+
+    def _set_file_paths(self, path):
+        
+        self.image_paths = [path]
+
+
+
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ import os
 from torchio.data.io import sitk_to_nib
 import SimpleITK as sitk
 
+#####################
+from segment_anything.build_sam3D import sam_model_registry3D
 
 def random_sample_next_click(prev_mask, gt_mask):
     """
@@ -278,14 +280,28 @@ if __name__ == "__main__":
     roi_image, roi_label, meta_info = data_preprocess(img_path, gt_path, category_index=category_index)
     
     ''' 2. prepare the pre-trained model with local path or huggingface url '''
-    ckpt_path = "https://huggingface.co/blueyo0/SAM-Med3D/blob/main/sam_med3d_turbo.pth"
+    # ckpt_path = "https://huggingface.co/blueyo0/SAM-Med3D/blob/main/sam_med3d_turbo.pth"
+
+
+
     # or you can use the local path like: ckpt_path = "./ckpt/sam_med3d_turbo.pth"
-    model = medim.create_model("SAM-Med3D",
-                               pretrained=True,
-                               checkpoint_path=ckpt_path)
+    # model = medim.create_model("SAM-Med3D",
+    #                            pretrained=True,
+    #                            checkpoint_path=ckpt_path)
     
+    # if checkpoint_path is not None:
+    sam_model_tune = sam_model_registry3D["vit_b_ori"](checkpoint=None).to(
+            "cuda"
+        )
+    
+    checkpoint_path = os.path.join(os.path.abspaths(os.path.dirname(__file__)), "ckpt/sam_med3d_turbo.pth") 
+    model_dict = torch.load(checkpoint_path, map_location="cuda", weights_only=False)
+    state_dict = model_dict["model_state_dict"]
+    sam_model_tune.load_state_dict(state_dict)
+    
+
     ''' 3. infer with the pre-trained SAM-Med3D model '''
-    roi_pred = sam_model_infer(model, roi_image, roi_gt=roi_label)
+    roi_pred = sam_model_infer(sam_model_tune, roi_image, roi_gt=roi_label)
 
     ''' 4. post-process and save the result '''
     output_path = osp.join(output_dir, osp.basename(img_path).replace(".nii.gz", "_pred.nii.gz"))

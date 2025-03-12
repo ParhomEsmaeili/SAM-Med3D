@@ -23,13 +23,13 @@ from utils.data_loader import Dataset_Union_ALL_Val
 from itertools import product
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-tdp', '--test_data_path', type=str, default='./data/validation')
-parser.add_argument('-cp', '--checkpoint_path', type=str, default='./ckpt/sam_med3d.pth')
+parser.add_argument('-tdp', '--test_data_path', type=str, default='test_data/kidney_right/AMOS')
+parser.add_argument('-cp', '--checkpoint_path', type=str, default='ckpt/sam_med3d_turbo.pth')
 parser.add_argument('--output_dir', type=str, default='./visualization')
 parser.add_argument('--task_name', type=str, default='test_amos')
 parser.add_argument('--skip_existing_pred', action='store_true', default=False)
 parser.add_argument('--save_image_and_gt', action='store_true', default=False)
-parser.add_argument('--sliding_window', action='store_true', default=False)
+parser.add_argument('--sliding_window', action='store_true', default=True)
 
 parser.add_argument('--image_size', type=int, default=256)
 parser.add_argument('--crop_size', type=int, default=128)
@@ -381,9 +381,9 @@ def save_numpy_to_nifti(in_arr: np.array, out_path, meta_info):
 
 
 if __name__ == "__main__":    
-    all_dataset_paths = glob(join(args.test_data_path, "*", "*"))
-    all_dataset_paths = list(filter(osp.isdir, all_dataset_paths))
-    print("get", len(all_dataset_paths), "datasets")
+    # all_dataset_paths = glob(join(args.test_data_path, "*", "*"))
+    # all_dataset_paths = list(filter(osp.isdir, all_dataset_paths))
+    # print("get", len(all_dataset_paths), "datasets")
 
     crop_transform = tio.CropOrPad(
         mask_name='label', 
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     ]
 
     test_dataset = Dataset_Union_ALL_Val(
-        paths=all_dataset_paths, 
+        paths=[os.path.join(os.path.abspath(os.path.dirname(__file__)), args.test_data_path)],#all_dataset_paths, 
         mode="Val", 
         data_type=args.data_type, 
         transform=tio.Compose(infer_transform),
@@ -412,7 +412,7 @@ if __name__ == "__main__":
         shuffle=True
     )
 
-    checkpoint_path = args.checkpoint_path
+    checkpoint_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.checkpoint_path)
 
     device = args.device
     print("device:", device)
@@ -420,7 +420,7 @@ if __name__ == "__main__":
     if(args.dim==3):
         sam_model_tune = sam_model_registry3D[args.model_type](checkpoint=None).to(device)
         if checkpoint_path is not None:
-            model_dict = torch.load(checkpoint_path, map_location=device)
+            model_dict = torch.load(checkpoint_path, map_location=device, weights_only=False)
             state_dict = model_dict['model_state_dict']
             sam_model_tune.load_state_dict(state_dict)
     else:
@@ -436,7 +436,7 @@ if __name__ == "__main__":
     out_dice_all = OrderedDict()
 
     for batch_data in tqdm(test_dataloader):
-        image3D, gt3D, meta_info = batch_data
+        image3D, gt3D, meta_info = tuple(batch_data.values())
         img_name = meta_info["image_path"][0]
 
         modality = osp.basename(osp.dirname(osp.dirname(osp.dirname(img_name))))
@@ -460,7 +460,7 @@ if __name__ == "__main__":
                     prev_masks=None)
                 ori_roi, pred_roi = pos3D["ori_roi"], pos3D["pred_roi"]
                 for idx, seg_mask in enumerate(seg_mask_list):
-                    seg_mask_roi = seg_mask[..., pred_roi[0]:pred_roi[1], pred_roi[2]:pred_roi[3], pred_roi[4]:pred_roi[5]]
+                    seg_mask_roi = seg_mask[pred_roi[0]:pred_roi[1], pred_roi[2]:pred_roi[3], pred_roi[4]:pred_roi[5]] #seg_mask[..., pred_roi[0]:pred_roi[1], pred_roi[2]:pred_roi[3], pred_roi[4]:pred_roi[5]]
                     pred3D_full_dict[idx][..., ori_roi[0]:ori_roi[1], ori_roi[2]:ori_roi[3], ori_roi[4]:ori_roi[5]] = seg_mask_roi
 
             os.makedirs(vis_root, exist_ok=True)

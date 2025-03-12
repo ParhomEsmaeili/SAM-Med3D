@@ -32,18 +32,18 @@ from utils.click_method import (
     get_next_click3D_torch_no_gt_naive,
     get_next_click3D_torch_no_gt,
 )
-from utils.data_loader import Dataset_Union_ALL_Infer
+from utils.data_loader import Dataset_Union_ALL_Infer, Infer_Single
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-tdp", "--test_data_path", type=str, default="./data/validation")
+parser.add_argument("-tdp", "--test_data_path", type=str, default="test_data/kidney_right/AMOS/imagesVal")#"./data/validation")
 parser.add_argument(
-    "-cp", "--checkpoint_path", type=str, default="./ckpt/sam_med3d.pth"
+    "-cp", "--checkpoint_path", type=str, default="ckpt/sam_med3d_turbo.pth"
 )
 parser.add_argument("--output_dir", type=str, default="./visualization")
 parser.add_argument("--task_name", type=str, default="test_amos")
 parser.add_argument("--skip_existing_pred", action="store_true", default=False)
 parser.add_argument("--save_image", action="store_true", default=True)
-parser.add_argument("--sliding_window", action="store_true", default=False)
+parser.add_argument("--sliding_window", action="store_true", default=True)
 
 parser.add_argument("--image_size", type=int, default=256)
 parser.add_argument("--crop_size", type=int, default=128)
@@ -489,10 +489,11 @@ def save_numpy_to_nifti(in_arr: np.array, out_path, meta_info):
 
 
 if __name__ == "__main__":
-    all_dataset_paths = glob(join(args.test_data_path, "*", "*"))
-    all_dataset_paths = list(filter(osp.isdir, all_dataset_paths))
-    print("get", len(all_dataset_paths), "datasets")
+    # all_dataset_paths = glob(join(args.test_data_path))#, "*", "*"))
+    # all_dataset_paths = list(filter(osp.isdir, all_dataset_paths))
+    # print("get", len(all_dataset_paths), "datasets")
 
+    dataset_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'test_data') # args.test_data_path, 'amos_0013.nii.gz')  
     crop_transform = tio.CropOrPad(
         target_shape=(args.crop_size, args.crop_size, args.crop_size)
     )
@@ -500,9 +501,9 @@ if __name__ == "__main__":
     infer_transform = [
         tio.ToCanonical(),
     ]
-
+    
     test_dataset = Dataset_Union_ALL_Infer(
-        paths=all_dataset_paths,
+        paths=[dataset_path],
         data_type=args.data_type,
         transform=tio.Compose(infer_transform),
         split_num=args.split_num,
@@ -511,11 +512,20 @@ if __name__ == "__main__":
         get_all_meta_info=True,
     )
 
+    # path = os.path.join(dataset_path, 'amos_0013.nii.gz')
+    # test_dataset = Infer_Single(
+    #     path=path,
+    #     transform=tio.Compose(infer_transform),
+    #     split_num=args.split_num,
+    #     split_idx=args.split_idx,
+    #     pcc=False,
+    #     get_all_meta_info=True, 
+    # )
     test_dataloader = DataLoader(
         dataset=test_dataset, sampler=None, batch_size=1, shuffle=True
     )
 
-    checkpoint_path = args.checkpoint_path
+    checkpoint_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.checkpoint_path)
 
     device = args.device
     print("device:", device)
@@ -525,7 +535,7 @@ if __name__ == "__main__":
             device
         )
         if checkpoint_path is not None:
-            model_dict = torch.load(checkpoint_path, map_location=device)
+            model_dict = torch.load(checkpoint_path, map_location=device, weights_only=False)
             state_dict = model_dict["model_state_dict"]
             sam_model_tune.load_state_dict(state_dict)
     else:
@@ -533,7 +543,7 @@ if __name__ == "__main__":
             "this scipts is designed for 3D sliding-window inference, not support other dims"
         )
 
-    sam_trans = ResizeLongestSide3D(sam_model_tune.image_encoder.img_size)
+    # sam_trans = ResizeLongestSide3D(sam_model_tune.image_encoder.img_size)
     norm_transform = tio.ZNormalization(masking_method=lambda x: x > 0)
 
     for batch_data in tqdm(test_dataloader):
