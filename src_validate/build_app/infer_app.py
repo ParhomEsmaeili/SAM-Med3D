@@ -140,23 +140,23 @@ class InferApp:
         prompt_subj = tio.Subject(label=subject['label'])
 
         #Implementing an image-level intensity normalisation in-line with the approach that the SAM-Med3D authors take.
-        intensity_transforms = tio.Compose([tio.Clamp(-1000,1000), tio.ZNormalization(masking_method=lambda x: x > 0)]) if self.dataset_info['modality'].title() == 'CT' else tio.Compose([tio.ZNormalization(masking_method=lambda x: x > 0)])
+        intensity_transforms = tio.Compose([tio.Clamp(-1000,1000), tio.ZNormalization(masking_method=lambda x: x > 0)]) if self.dataset_info['dataset_modality'].title() == 'CT' else tio.Compose([tio.ZNormalization(masking_method=lambda x: x > 0)])
         im_subj = intensity_transforms(im_subj)
 
 
         #We create separate grid samplers for the image and the prompts, same padding dimensions but different padding modes since prompts should have no injected info
         #meanwhile it is probably best to use transform which will minimise the shift in the histogram of the image patch.
 
-        im_grid_sampler = tio.inference.GridSampler(im_subj, self.patch_size, (pad_dim1, pad_dim2, pad_dim3), 'reflect')
+        im_grid_sampler = tio.inference.GridSampler(im_subj, self.patch_size, (pad_dim1, pad_dim2, pad_dim3), 0)
         prompt_grid_sampler = tio.inference.GridSampler(prompt_subj, self.patch_size, (pad_dim1, pad_dim2, pad_dim3), 0)
 
-        #We elect to just pad with reflection and then crop the overlapping regions anyways. This is probably not ideal for a ViT nevertheless it will likely ensure 
-        # that the distribution of the voxel intensities does not vary as substantially. 
+        #We elect to just pad with zero and then crop the overlapping regions anyways. This is probably not ideal, nevertheless it will likely ensure 
+        # that the distribution of the voxel intensities will be shifted in a similar capacity regardless of the voxel intensities of the border.
 
         im_patch_loader = tio.SubjectsLoader(im_grid_sampler, batch_size=1)
         prompt_patch_loader = tio.SubjectsLoader(prompt_grid_sampler, batch_size=1)
 
-        aggregator = tio.inference.GridAggregator(im_grid_sampler, overlap_mode='average')
+        aggregator = tio.inference.GridAggregator(im_grid_sampler, overlap_mode='crop')
 
         for i, (patch1, patch2) in enumerate(zip(im_patch_loader, prompt_patch_loader)):
             # print(patch1)
@@ -169,7 +169,7 @@ class InferApp:
 
             except:
                 #Normalisation of the image.
-                # intensity_transforms = tio.Compose([tio.Clamp(-1000,1000), tio.ZNormalization(masking_method=lambda x: x > 0)]) if self.dataset_info['modality'].title() == 'CT' else tio.Compose([tio.ZNormalization(masking_method=lambda x: x > 0)])
+                # intensity_transforms = tio.Compose([tio.Clamp(-1000,1000), tio.ZNormalization(masking_method=lambda x: x > 0)]) if self.dataset_info['dataset_modality'].title() == 'CT' else tio.Compose([tio.ZNormalization(masking_method=lambda x: x > 0)])
                 # #Need to squeeze into a 4D image
                 # im3d = intensity_transforms(patch1['image']['data'][0,:])
                 # #Now unsqueeze for the img encoder.
@@ -210,15 +210,27 @@ class InferApp:
                         labels_input.append(coors_lbs)
                     else:
                         continue 
-                
-                points_input = torch.cat(points_input, dim=0)
-                labels_input = torch.cat(labels_input, dim=0)
+                if not points_input:
+                    input_points = None 
+                else: 
+                    points_input = torch.cat(points_input, dim=0)
+                    labels_input = torch.cat(labels_input, dim=0)
 
-                print(f'points are {points_input}')
-                print(f'The patch location is {patch1["location"]}') 
+                    print(f'points are {points_input}')
+                    print(f'The patch location is {patch1["location"]}') 
+
+                    #Note: SAM-Med3D appears to be incapable of handling multiple input prompt coordinates simultaneously, hence we will randomly sample one of the extracted
+                    #points, as an approximation to the original point. NOTE: This is very suboptimal, and may lead to some real points being ignored as a result also.
+                    #(i.e. not the "pseudo" points generated as a byproduct of resampling) if more than one point falls into the same patch.
+
+                    random_point_n = torch.randint(low=0, high=points_input.shape[0], size=(1,))
+                    points_input = points_input[random_point_n, :] 
+                    labels_input = labels_input[random_point_n, :]
+
+                    input_points = [points_input, labels_input]
 
                 sparse_embeddings, dense_embeddings = self.sam_model.prompt_encoder(
-                    points=[points_input, labels_input],
+                    points=input_points,
                     boxes=None,
                     masks=low_res_masks.to(self.infer_device),
                 )
@@ -231,7 +243,7 @@ class InferApp:
                 )
                 upsampled_mask = F.interpolate(
                     low_res_masks,
-                    size=im3d.data.shape[-3:],
+                    size=patch1['image']['data'].shape[-3:],
                     mode="trilinear",
                     align_corners=False,
                 )
@@ -283,7 +295,7 @@ class InferApp:
 
         return probs_maps, pred, affine 
     
-    def prompt_prep(self, prompts_tensor, is_state):
+    def prompt_prep(self, request, prompts_tensor, is_state):
     
         #Splitting prompts by class, and performing a re-mapping with the assumption that integer codes >= 0.
         for ptype, ps in is_state['interaction_dict_format'].items():
@@ -349,7 +361,7 @@ class InferApp:
             key = edit_names_list[-1]
             is_state = request['im'][key]
 
-            prompts_tensor = self.prompt_prep(prompts_tensor=prompts_tensor, is_state=is_state)
+            prompts_tensor = self.prompt_prep(request=request,prompts_tensor=prompts_tensor, is_state=is_state)
 
             assert self.image_embeddings, 'Image embeddings must exist and be stored for editing'
             assert self.low_res_masks, 'Low res forward propagated masks must exist and be stored for editing'
@@ -361,7 +373,7 @@ class InferApp:
             self.low_res_masks = {} 
 
             is_state = request['im'][key]
-            prompts_tensor = self.prompt_prep(prompts_tensor=prompts_tensor, is_state=is_state)
+            prompts_tensor = self.prompt_prep(request=request,prompts_tensor=prompts_tensor, is_state=is_state)
 
         elif request['model'] == 'IS_autoseg':
             key = 'Automatic Init'
@@ -492,52 +504,52 @@ class InferApp:
         return output 
 
 
-if __name__ == '__main__':
-    infer_app = InferApp(
-        {'dataset_name':'BraTS2021',
-        'modality':'MRI'}, torch.device('cuda'))
+# if __name__ == '__main__':
+#     infer_app = InferApp(
+#         {'dataset_name':'BraTS2021',
+#         'dataset_modality':'MRI'}, torch.device('cuda'))
 
-    infer_app.app_configs()
+#     infer_app.app_configs()
 
-    request = {
-        'image':{
-            'metatensor': MetaTensor(torch.randn((1,120,120,77)).abs(), affine=torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])),
-            'meta_dict':{'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}
-        },
-        # 'model':'IS_interactive_edit',
-        'model': 'IS_interactive_init',
-        'config_labels_dict':{'background':0, 'tumor':1},
-        'im':
+#     request = {
+#         'image':{
+#             'metatensor': MetaTensor(torch.randn((1,120,120,77)).abs(), affine=torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])),
+#             'meta_dict':{'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}
+#         },
+#         # 'model':'IS_interactive_edit',
+#         'model': 'IS_interactive_init',
+#         'config_labels_dict':{'background':0, 'tumor':1},
+#         'im':
         
-        # {'Automatic Init': None}
-        {'Interactive Init':{
-            'interaction_torch_format': {'interactions': {'points': [torch.tensor([[40, 103, 43]]), torch.tensor([[62, 62, 39]])], 'scribbles': None, 'bboxes': None}, 'interactions_labels': {'points': [torch.tensor([0]), torch.tensor([1])], 'scribbles': None, 'bboxes': None}},  
-            'interaction_dict_format': {
-            'points': {'background': [[40, 103, 43]],
-            # 'tumor': [[62, 62, 39]]
-            'tumor':[[30,30,15]]
-            },
-            'scribbles': None,
-            'bboxes': None
-            },
-            'prev_probs': {'metatensor': None, 'meta_dict': None}, 
-            'prev_pred': {'metatensor': None, 'meta_dict': None}}
-        },
-        # {'Interactive Edit Iter 1':
-        # {'interaction_torch_format': {'interactions': {'points': [torch.tensor([[40, 103, 43]]), torch.tensor([[62, 62, 39]])], 'scribbles': None, 'bboxes': None}, 'interactions_labels': {'points': [torch.tensor([0]), torch.tensor([1])], 'scribbles': None, 'bboxes': None}}, 
-        # 'interaction_dict_format': {
-        # 'points': {'background': [[40, 103, 43]],
-        # 'tumor': [[62, 62, 39]]
-        # },
-        # 'scribbles': None,
-        # 'bboxes': None
-        # },
-        # 'prev_probs': {'metatensor': torch.randn(2,120,120,77), 'meta_dict': {'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}}, 
-        # 'prev_pred': {'metatensor': torch.randn(1,120,120,77).to(dtype=torch.int64), 'meta_dict': {'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}}
-        # }
+#         # {'Automatic Init': None}
+#         {'Interactive Init':{
+#             'interaction_torch_format': {'interactions': {'points': [torch.tensor([[40, 103, 43]]), torch.tensor([[62, 62, 39]])], 'scribbles': None, 'bboxes': None}, 'interactions_labels': {'points': [torch.tensor([0]), torch.tensor([1])], 'scribbles': None, 'bboxes': None}},  
+#             'interaction_dict_format': {
+#             'points': {'background': [[40, 103, 43]],
+#             # 'tumor': [[62, 62, 39]]
+#             'tumor':[[30,30,15]]
+#             },
+#             'scribbles': None,
+#             'bboxes': None
+#             },
+#             'prev_probs': {'metatensor': None, 'meta_dict': None}, 
+#             'prev_pred': {'metatensor': None, 'meta_dict': None}}
+#         },
+#         # {'Interactive Edit Iter 1':
+#         # {'interaction_torch_format': {'interactions': {'points': [torch.tensor([[40, 103, 43]]), torch.tensor([[62, 62, 39]])], 'scribbles': None, 'bboxes': None}, 'interactions_labels': {'points': [torch.tensor([0]), torch.tensor([1])], 'scribbles': None, 'bboxes': None}}, 
+#         # 'interaction_dict_format': {
+#         # 'points': {'background': [[40, 103, 43]],
+#         # 'tumor': [[62, 62, 39]]
+#         # },
+#         # 'scribbles': None,
+#         # 'bboxes': None
+#         # },
+#         # 'prev_probs': {'metatensor': torch.randn(2,120,120,77), 'meta_dict': {'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}}, 
+#         # 'prev_pred': {'metatensor': torch.randn(1,120,120,77).to(dtype=torch.int64), 'meta_dict': {'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}}
+#         # }
 
-        # }
+#         # }
 
-    }
-    infer_app(request)
-    print('halt')
+#     }
+#     infer_app(request)
+#     print('halt')
