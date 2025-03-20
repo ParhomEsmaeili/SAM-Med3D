@@ -46,6 +46,7 @@ class InferApp:
             model_dict = torch.load(ckpt_path, map_location=self.infer_device, weights_only=False)
             state_dict = model_dict["model_state_dict"]
             self.sam_model.load_state_dict(state_dict)
+            self.sam_model.eval()
         else:
             raise Exception 
     
@@ -303,9 +304,8 @@ class InferApp:
         #Splitting prompts by class, and performing a re-mapping with the assumption that integer codes >= 0.
         for ptype, ps in is_state['interaction_dict_format'].items():
             if ps is not None:
-                assert ptype.title() == 'Points'
-            else:
-                continue 
+                if ptype.title() != 'Points':
+                    raise Exception(f'SAMMed3D does not work with {ptype} prompts')
 
             #Splitting by class and mapping/projecting onto the prompts tensor.
             for class_lb in request['config_labels_dict'].keys():
@@ -326,7 +326,7 @@ class InferApp:
     
     
     def subject_prep(self, request):
-        img = request['image']['metatensor']
+        img = copy.deepcopy(request['image']['metatensor'])
         affine = copy.deepcopy(request['image']['metatensor'].meta['affine'])
         shape = img.shape 
     
