@@ -16,6 +16,7 @@ import torch
 import torch.nn.functional as F
 import torchio as tio
 import re 
+import warnings
 
 class InferApp:
     def __init__(self,
@@ -316,7 +317,7 @@ class InferApp:
                         p_coords = torch.stack([torch.tensor(i) for i in ps[class_lb]], dim=0) #Here each list is nested once
                     elif ptype.title() == 'Scribbles':
                         p_coords = torch.cat([torch.tensor(i) for i in ps[class_lb]], dim=0) #Here each list is nested twice.
-
+                        warnings.warn('SAMMed3D was not developed for scribbles...')
                     #We then inject the set of prompts into the prompts tensor according to the coords and dummy_config label.  
                     #First we append a 0 index as the spatial coordinates of the prompt do not reflect the channel-first nature of the image.
                     p_coords = torch.cat([torch.zeros(p_coords.shape[0],1), p_coords], dim=1)                      
